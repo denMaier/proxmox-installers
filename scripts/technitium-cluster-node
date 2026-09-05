@@ -1,0 +1,196 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+PASSWORD_FILE="${TECHNITIUM_ADMIN_PASSWORD_FILE:-/opt/technitium/admin-password}"
+LOCAL_API="http://127.0.0.1:5380"
+
+die() {
+  echo "Error: $*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'EOF'
+Usage:
+  technitium-cluster-node init-primary --domain DOMAIN --ip IPV4
+  technitium-cluster-node join --primary IPV4 --secondary IPV4 [--username admin]
+  technitium-cluster-node status
+
+The command reads the Technitium password from
+/opt/technitium/admin-password. For a primary using TOTP, provide the current
+code through TDNS_PRIMARY_TOTP.
+EOF
+}
+
+require_tools() {
+  local command_name
+  for command_name in curl jq; do
+    command -v "$command_name" >/dev/null || die "Missing command: $command_name"
+  done
+  [[ -s "$PASSWORD_FILE" ]] || die "Missing password file: $PASSWORD_FILE"
+}
+
+check_response() {
+  local response="$1" context="$2" status error
+  status="$(jq -r '.status // empty' <<<"$response")"
+  if [[ "$status" != "ok" ]]; then
+    error="$(jq -r '.errorMessage // "unknown API error"' <<<"$response")"
+    die "${context}: ${error}"
+  fi
+}
+
+login() {
+  local api="$1" username="$2" totp="${3:-}" response
+  response="$(curl -fsS --max-time 20 \
+    --data-urlencode "user=${username}" \
+    --data-urlencode "pass@${PASSWORD_FILE}" \
+    --data-urlencode "totp=${totp}" \
+    "${api}/api/user/login")"
+  check_response "$response" "Login to ${api}"
+  jq -r '.token' <<<"$response"
+}
+
+cluster_state() {
+  local api="$1" token="$2"
+  curl -fsS --max-time 20 \
+    -H "Authorization: Bearer ${token}" \
+    "${api}/api/admin/cluster/state"
+}
+
+init_primary() {
+  local domain="" ip="" token state response
+  shift
+  while (($#)); do
+    case "$1" in
+    --domain)
+      domain="${2:-}"
+      shift 2
+      ;;
+    --ip)
+      ip="${2:-}"
+      shift 2
+      ;;
+    *)
+      die "Unknown argument: $1"
+      ;;
+    esac
+  done
+  [[ -n "$domain" && -n "$ip" ]] || die "init-primary requires --domain and --ip"
+
+  token="$(login "$LOCAL_API" admin)"
+  state="$(cluster_state "$LOCAL_API" "$token")"
+  check_response "$state" "Read local cluster state"
+  if [[ "$(jq -r '.response.clusterInitialized' <<<"$state")" == "true" ]]; then
+    [[ "$(jq -r '.response.clusterDomain' <<<"$state")" == "$domain" ]] ||
+      die "This server already belongs to a different cluster"
+    echo "Cluster primary is already initialized."
+    return 0
+  fi
+
+  response="$(curl -fsS --max-time 60 \
+    -H "Authorization: Bearer ${token}" \
+    --data-urlencode "clusterDomain=${domain}" \
+    --data-urlencode "primaryNodeIpAddresses=${ip}" \
+    "${LOCAL_API}/api/admin/cluster/init")"
+  check_response "$response" "Initialize cluster"
+  echo "Initialized cluster ${domain}."
+}
+
+join_cluster() {
+  local primary="" secondary="" username="admin"
+  local local_token local_state primary_api primary_token primary_state
+  local primary_url response attempt state
+  shift
+  while (($#)); do
+    case "$1" in
+    --primary)
+      primary="${2:-}"
+      shift 2
+      ;;
+    --secondary)
+      secondary="${2:-}"
+      shift 2
+      ;;
+    --username)
+      username="${2:-}"
+      shift 2
+      ;;
+    *)
+      die "Unknown argument: $1"
+      ;;
+    esac
+  done
+  [[ -n "$primary" && -n "$secondary" ]] ||
+    die "join requires --primary and --secondary"
+  [[ "$username" == "admin" ]] ||
+    die "Only the shared admin account is supported for cluster joining"
+
+  local_token="$(login "$LOCAL_API" admin)"
+  local_state="$(cluster_state "$LOCAL_API" "$local_token")"
+  check_response "$local_state" "Read local cluster state"
+  if [[ "$(jq -r '.response.clusterInitialized' <<<"$local_state")" == "true" ]]; then
+    echo "This server is already a cluster member."
+    return 0
+  fi
+
+  primary_api="http://${primary}:5380"
+  primary_token="$(login "$primary_api" "$username" "${TDNS_PRIMARY_TOTP:-}")"
+  primary_state="$(cluster_state "$primary_api" "$primary_token")"
+  check_response "$primary_state" "Read primary cluster state"
+  [[ "$(jq -r '.response.clusterInitialized' <<<"$primary_state")" == "true" ]] ||
+    die "The selected primary has not initialized a cluster"
+  primary_url="$(jq -r '.response.clusterNodes[] | select(.type == "Primary") | .url' <<<"$primary_state" | head -n1)"
+  [[ -n "$primary_url" && "$primary_url" != "null" ]] ||
+    die "The primary node URL was not returned"
+
+  response="$(curl -fsS --max-time 180 \
+    -H "Authorization: Bearer ${local_token}" \
+    --data-urlencode "secondaryNodeIpAddresses=${secondary}" \
+    --data-urlencode "primaryNodeUrl=${primary_url}" \
+    --data-urlencode "primaryNodeIpAddress=${primary}" \
+    --data-urlencode "ignoreCertificateErrors=true" \
+    --data-urlencode "primaryNodeUsername=${username}" \
+    --data-urlencode "primaryNodePassword@${PASSWORD_FILE}" \
+    --data-urlencode "primaryNodeTotp=${TDNS_PRIMARY_TOTP:-}" \
+    "${LOCAL_API}/api/admin/cluster/initJoin")"
+  check_response "$response" "Join cluster"
+
+  for attempt in {1..36}; do
+    sleep 5
+    local_token="$(login "$LOCAL_API" admin "${TDNS_PRIMARY_TOTP:-}" 2>/dev/null || true)"
+    [[ -n "$local_token" ]] || continue
+    state="$(cluster_state "$LOCAL_API" "$local_token" 2>/dev/null || true)"
+    [[ -n "$state" ]] || continue
+    if [[ "$(jq -r '.response.clusterInitialized // false' <<<"$state")" == "true" ]] &&
+      jq -e '.response.clusterNodes[] | select(.type == "Primary" and (.state == "Connected" or .state == "Self"))' \
+        <<<"$state" >/dev/null; then
+      echo "Joined the cluster and connected to its primary."
+      return 0
+    fi
+  done
+  die "The join request succeeded, but the primary did not become connected"
+}
+
+show_status() {
+  local token state
+  token="$(login "$LOCAL_API" admin "${TDNS_PRIMARY_TOTP:-}")"
+  state="$(cluster_state "$LOCAL_API" "$token")"
+  check_response "$state" "Read cluster state"
+  jq -r '
+    "cluster: \(.response.clusterDomain // "not initialized")",
+    (.response.clusterNodes[]? | "\(.name)\t\(.type)\t\(.state)")
+  ' <<<"$state"
+}
+
+require_tools
+case "${1:-}" in
+init-primary) init_primary "$@" ;;
+join) join_cluster "$@" ;;
+status) show_status ;;
+-h | --help | help) usage ;;
+*)
+  usage >&2
+  exit 2
+  ;;
+esac

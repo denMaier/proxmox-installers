@@ -1,0 +1,20 @@
+name: Test scripts
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Check Bash syntax
+        run: bash -n ct/*.sh install/*.sh scripts/*
+      - name: Run ShellCheck
+        run: shellcheck ct/*.sh install/*.sh scripts/*
