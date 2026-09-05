@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-_CS_DEFAULT_URL="${TDNS_REPO_RAW_URL:-https://raw.githubusercontent.com/denMaier/technitium-cluster-lxc/main}"
+_CS_DEFAULT_URL="${TDNS_REPO_RAW_URL:-https://raw.githubusercontent.com/denMaier/proxmox-installers/main}"
 _cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
 source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 
@@ -11,10 +11,10 @@ source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_
 
 APP="Technitium DNS"
 _script_root="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")/.." 2>/dev/null && pwd || true)"
-if [[ -f "${_script_root}/VERSION" ]]; then
-  _tdns_version="$(tr -d '[:space:]' <"${_script_root}/VERSION")"
+if [[ -f "${_script_root}/versions/technitiumdns" ]]; then
+  _tdns_version="$(tr -d '[:space:]' <"${_script_root}/versions/technitiumdns")"
 else
-  _tdns_version="$(curl -fsSL "${_CS_DEFAULT_URL}/VERSION" | tr -d '[:space:]')"
+  _tdns_version="$(curl -fsSL "${_CS_DEFAULT_URL}/versions/technitiumdns" | tr -d '[:space:]')"
 fi
 var_tags="${var_tags:-dns;infra}"
 var_cpu="${var_cpu:-2}"
@@ -33,7 +33,7 @@ color
 catch_errors
 
 repo_version() {
-  curl -fsSL "${COMMUNITY_SCRIPTS_URL:-$_CS_DEFAULT_URL}/VERSION" | tr -d '[:space:]'
+  curl -fsSL "${COMMUNITY_SCRIPTS_URL:-$_CS_DEFAULT_URL}/versions/technitiumdns" | tr -d '[:space:]'
 }
 
 function update_script() {

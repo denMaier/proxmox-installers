@@ -18,7 +18,7 @@ msg_ok "Installed Podman and keepalived"
 
 version="${APPLICATION_VERSION:-}"
 if [[ -z "$version" ]]; then
-  version="$(curl -fsSL "${COMMUNITY_SCRIPTS_URL}/VERSION" | tr -d '[:space:]')"
+  version="$(curl -fsSL "${COMMUNITY_SCRIPTS_URL}/versions/technitiumdns" | tr -d '[:space:]')"
 fi
 if [[ ! "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
   msg_error "Invalid VERSION value: $version"
