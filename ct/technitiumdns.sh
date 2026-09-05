@@ -10,7 +10,7 @@ source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_
 # Sources: https://technitium.com/dns/ and https://github.com/containers/podman
 
 APP="Technitium DNS"
-_script_root="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")/.." 2>/dev/null && pwd || true)"
+_script_root="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")/.." 2>/dev/null && pwd)"
 if [[ -f "${_script_root}/versions/technitiumdns" ]]; then
   _tdns_version="$(tr -d '[:space:]' <"${_script_root}/versions/technitiumdns")"
 else
