@@ -13,7 +13,7 @@ network_check
 update_os
 
 msg_info "Installing Podman and keepalived"
-$STD apt-get install -y podman keepalived jq
+$STD apt-get install -y podman keepalived jq bind9-dnsutils
 msg_ok "Installed Podman and keepalived"
 
 version="${APPLICATION_VERSION:-}"
@@ -59,8 +59,11 @@ EOF
 
 cat >/usr/local/sbin/check-technitium <<'EOF'
 #!/bin/sh
-curl -fsS --max-time 2 http://127.0.0.1:5380/api/status |
-  grep -q '"status":"ok"'
+# Healthy only if the API is up and IPv4 DNS answers. A NetBird client that
+# starts first can take :53 and leave Technitium without IPv4 listeners.
+curl -fsS --max-time 1 http://127.0.0.1:5380/api/status |
+  grep -q '"status":"ok"' || exit 1
+dig +time=1 +tries=1 +short @127.0.0.1 localhost A | grep -qx '127.0.0.1'
 EOF
 chmod 0755 /usr/local/sbin/check-technitium
 
